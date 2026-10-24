@@ -32,8 +32,9 @@ SYSTEM_PROMPT = """
 def get_model():
     api_key = os.environ.get("GEMINI_API_KEY", "")
     genai.configure(api_key=api_key)
+    # استخدام flash-latest يضمن التوافق المباشر
     return genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
+        model_name="gemini-1.5-flash-latest",
         system_instruction=SYSTEM_PROMPT
     )
 
@@ -58,7 +59,6 @@ async def analyze_question(file: UploadFile = File(...)):
         chat = model.start_chat(history=[])
         prompt = "حلل السؤال الموضح في الصورة، واشرح فكرته باختصار ووجهني للخطوة الأولى فقط دون حل مباشر:"
         
-        # استدعاء مباشر وسليم بدون تعارض async
         response = chat.send_message([image_part, prompt])
         sessions[session_id] = chat
         
