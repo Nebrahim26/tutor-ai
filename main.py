@@ -31,12 +31,11 @@ SYSTEM_PROMPT = """
 def get_model():
     api_key = os.environ.get("GEMINI_API_KEY", "")
     genai.configure(api_key=api_key)
-    
-    # استخدام النموذج الموصى به مباشرة
-    try:
-        return genai.GenerativeModel(model_name="gemini-2.0-flash", system_instruction=SYSTEM_PROMPT)
-    except Exception:
-        return genai.GenerativeModel(model_name="gemini-2.0-flash-exp", system_instruction=SYSTEM_PROMPT)
+    # استخدام النموذج المذكور في رسالة الخطأ الرسمية
+    return genai.GenerativeModel(
+        model_name="gemini-3.8-flash",
+        system_instruction=SYSTEM_PROMPT
+    )
 
 sessions = {}
 
@@ -67,15 +66,7 @@ async def analyze_question(file: UploadFile = File(...)):
             "guidance": response.text
         }
     except Exception as e:
-        # محاولة أخيرة مع الاسم الموصى به في الخطأ
-        try:
-            model = genai.GenerativeModel(model_name="gemini-2.5-flash", system_instruction=SYSTEM_PROMPT)
-            chat = model.start_chat(history=[])
-            response = chat.send_message([image_part, prompt])
-            sessions[session_id] = chat
-            return {"session_id": session_id, "guidance": response.text}
-        except Exception as e2:
-            return {"guidance": f"حدث خطأ أثناء الاتصال: {str(e2)}"}
+        return {"guidance": f"حدث خطأ أثناء الاتصال: {str(e)}"}
 
 @app.post("/feedback")
 async def handle_feedback(data: FeedbackRequest):
