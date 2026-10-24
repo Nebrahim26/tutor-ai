@@ -17,34 +17,26 @@ app.add_middleware(
 
 SYSTEM_PROMPT = """
 أنت معلم وموجه ذكي للطلاب.
-أسلوبك مريح ولهجتك "بيضاء شبه عامية" ودودة ومبسطة جداً، كأنك معلم أخوي يدردش مع طالبه.
-القواعد:
+أسلوبك مريح ولهجتك "بيضاء شبه عامية" ودودة جداً ومبسطة (مثل معلم يدردش مع طالبه).
+القواعد الصارمة:
 1. استخرج السؤال من الصورة بدقة.
 2. ممنوع تعطي الحل النهائي أو الإجابة المباشرة نهائياً.
 3. رحب بالطالب بكلمة لطيفة بالعامية البيضاء، ووضح له فكرة السؤال باختصار وسهولة.
-4. اطلب منه الخطوة الأولى فقط، واسأله سؤال يساعده يبدأ الحل.
+4. اطلب منه الخطوة الأولى فقط، واسأله سؤال يساعده يبدأ الحل بنفسه.
 5. إذا قال "لم أفهم": اشرح له نفس الفكرة بتشبيه من واقع الحياة اليومية أو بسطها لأصغر جزئية.
 6. إذا قال "فهمت": شجعه بحماس وانتقل معه للخطوة التالية.
-7. اكتب بكلمات عربية واضحة ومباشرة وتجنب الرموز المعقدة حتى يكون النطق الصوتي واضحاً ومفهوماً.
+7. اكتب بكلمات عربية واضحة ومباشرة وتجنب الرموز المعقدة حتى ينطقها الصوت بوضوح وسلاسة.
 """
 
 def get_model():
     api_key = os.environ.get("GEMINI_API_KEY", "")
     genai.configure(api_key=api_key)
     
-    # محاولة استكشاف النماذج المتاحة في حسابك واختيار نموذج صالح
+    # استخدام النموذج الموصى به مباشرة
     try:
-        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        # البحث عن أي نموذج فلاش متاح
-        for m in available:
-            if "flash" in m:
-                return genai.GenerativeModel(model_name=m, system_instruction=SYSTEM_PROMPT)
-        if available:
-            return genai.GenerativeModel(model_name=available[0], system_instruction=SYSTEM_PROMPT)
+        return genai.GenerativeModel(model_name="gemini-2.0-flash", system_instruction=SYSTEM_PROMPT)
     except Exception:
-        pass
-    
-    return genai.GenerativeModel(model_name="gemini-1.5-flash-latest", system_instruction=SYSTEM_PROMPT)
+        return genai.GenerativeModel(model_name="gemini-2.0-flash-exp", system_instruction=SYSTEM_PROMPT)
 
 sessions = {}
 
@@ -75,7 +67,15 @@ async def analyze_question(file: UploadFile = File(...)):
             "guidance": response.text
         }
     except Exception as e:
-        return {"guidance": f"حدث خطأ أثناء الاتصال: {str(e)}"}
+        # محاولة أخيرة مع الاسم الموصى به في الخطأ
+        try:
+            model = genai.GenerativeModel(model_name="gemini-2.5-flash", system_instruction=SYSTEM_PROMPT)
+            chat = model.start_chat(history=[])
+            response = chat.send_message([image_part, prompt])
+            sessions[session_id] = chat
+            return {"session_id": session_id, "guidance": response.text}
+        except Exception as e2:
+            return {"guidance": f"حدث خطأ أثناء الاتصال: {str(e2)}"}
 
 @app.post("/feedback")
 async def handle_feedback(data: FeedbackRequest):
