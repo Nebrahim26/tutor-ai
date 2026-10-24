@@ -133,6 +133,8 @@
     </div>
   </div>
 
+  <audio id="audioPlayer"></audio>
+
   <script>
     const fileInput = document.getElementById('fileInput');
     const preview = document.getElementById('preview');
@@ -144,12 +146,12 @@
     const interactionGroup = document.getElementById('interactionGroup');
     const btnUnderstood = document.getElementById('btnUnderstood');
     const btnNotUnderstood = document.getElementById('btnNotUnderstood');
+    const audioPlayer = document.getElementById('audioPlayer');
 
     let currentSessionId = "";
-    let currentGuidanceText = "";
     let compressedBlob = null;
+    let currentAudioSrc = null;
 
-    // ضغط الصورة فوراً على هاتف الطالب لتقليل حجمها قبل الإرسال
     fileInput.onchange = async () => {
       const file = fileInput.files[0];
       if (!file) return;
@@ -184,6 +186,13 @@
       });
     }
 
+    function playAudioBase64(base64Data) {
+      if (!base64Data) return;
+      currentAudioSrc = "data:audio/mp3;base64," + base64Data;
+      audioPlayer.src = currentAudioSrc;
+      audioPlayer.play();
+    }
+
     sendBtn.onclick = async () => {
       if (!compressedBlob) return;
 
@@ -200,13 +209,11 @@
         const data = await res.json();
         
         currentSessionId = data.session_id;
-        currentGuidanceText = data.guidance;
-        
-        responseText.innerText = currentGuidanceText;
+        responseText.innerText = data.guidance;
         responseCard.style.display = 'block';
         interactionGroup.style.display = 'flex';
 
-        speak(currentGuidanceText);
+        playAudioBase64(data.audio);
       } catch (err) {
         alert("حدث ضغط مؤقت في الاتصال، يرجى إعادة المحاولة.");
       } finally {
@@ -218,7 +225,7 @@
     async function sendFeedback(actionType) {
       btnUnderstood.disabled = true;
       btnNotUnderstood.disabled = true;
-      responseText.innerText = "جاري التفكير في صياغة أبسط...";
+      responseText.innerText = "جاري التفكير في طريقة أبسط...";
 
       try {
         const res = await fetch("/feedback", {
@@ -227,9 +234,8 @@
           body: JSON.stringify({ session_id: currentSessionId, action: actionType })
         });
         const data = await res.json();
-        currentGuidanceText = data.guidance;
-        responseText.innerText = currentGuidanceText;
-        speak(currentGuidanceText);
+        responseText.innerText = data.guidance;
+        playAudioBase64(data.audio);
       } catch (err) {
         alert("تعذر الاتصال.");
       } finally {
@@ -240,18 +246,9 @@
 
     btnUnderstood.onclick = () => sendFeedback("understood");
     btnNotUnderstood.onclick = () => sendFeedback("not_understood");
-
-    function speak(text) {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'ar-SA';
-        utterance.rate = 0.95;
-        window.speechSynthesis.speak(utterance);
-      }
-    }
-
-    speakBtn.onclick = () => speak(currentGuidanceText);
+    speakBtn.onclick = () => {
+      if (currentAudioSrc) audioPlayer.play();
+    };
   </script>
 </body>
 </html>
