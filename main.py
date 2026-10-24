@@ -3,12 +3,11 @@ import uuid
 import tempfile
 import base64
 import edge_tts
+import google.generativeai as genai
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from google import genai
-from google.genai import types
 
 app = FastAPI()
 
@@ -20,33 +19,59 @@ app.add_middleware(
 )
 
 SYSTEM_PROMPT = """
-أنت معلم وموجه ذكي للطلاب، أسلوبك ودود ولهجتك "بيضاء شبه عامية" مريحة ومبسطة جداً (مثل أسلوب معلم يدردش مع طالبه).
-القواعد:
+أنت معلم وموجه ذكي للطلاب.
+أسلوبك مريح ولهجتك "بيضاء شبه عامية" ودودة جداً ومبسطة (مثل معلم يدردش مع طالبه).
+القواعد الصارمة:
 1. استخرج السؤال من الصورة بدقة.
-2. ممنوع تعطي الحل النهائي أو الإجابة أبداً!
-3. ابدأ بترحيب خفيف بالعامية البيضاء، ووضّح فكرة المسألة ببساطة بدون تعقيد.
-4. اعطه توجيه للخطوة الأولى فقط، واسأله سؤال يساعده يبدأ.
-5. إذا قال "لم أفهم": لا تكرر نفس الكلام، اشرح له نفس الفكرة بتشبيه بسيط من الحياة اليومية.
+2. ممنوع تعطي الحل النهائي أو الإجابة المباشرة نهائياً.
+3. رحب بالطالب بكلمة خفيفة بالعامية البيضاء، ووضح فكرة السؤال ببساطة.
+4. اطلب منه الخطوة الأولى فقط واسأله سؤال يساعده يبدأ الحل.
+5. إذا قال "لم أفهم": اشرح له نفس الفكرة بتشبيه من واقع الحياة أو قسّمها لأصغر خطوة.
 6. إذا قال "فهمت": شجعه بكلمة لطيفة وانتقل للخطوة اللي بعدها.
-7. لا تستخدم رموز رياضية إنجليزية معقدة داخل النص حتى ينطقها الصوت بشكل سليم وطبيعي.
+7. لا تكتب رموز ومعادلات إنجليزية معقدة لأن الكلام سيتحول لصوت مسموع.
 """
 
-def get_client():
+# دالة لاختيار أفضل نموذج متاح وشغال في حسابك تلقائياً
+def get_working_model():
     api_key = os.environ.get("GEMINI_API_KEY", "")
-    return genai.Client(api_key=api_key)
-
-# دالة تحويل النص إلى صوت طبيعي بلهجة خليجية/بيضاء
-async def text_to_speech_base64(text: str) -> str:
-    # صوت طبيعي جداً وعفوي (شخصية حامد - صوت خليجي واضح ومريح)
-    communicate = edge_tts.Communicate(text, "ar-SA-HamedNeural", rate="+5%")
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
-        temp_path = fp.name
+    genai.configure(api_key=api_key)
     
-    await communicate.save(temp_path)
-    with open(temp_path, "rb") as f:
-        audio_bytes = f.read()
-    os.remove(temp_path)
-    return base64.b64encode(audio_bytes).decode("utf-8")
+    # قائمة النماذج حسب الأفضلية
+    preferred_models = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+        "gemini-pro-vision"
+    ]
+    
+    try:
+        available_models = [m.name.replace("models/", "") for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        for pref in preferred_models:
+            if pref in available_models:
+                return genai.GenerativeModel(model_name=pref, system_instruction=SYSTEM_PROMPT)
+        # إذا لم يجد في القائمة، يأخذ أول نموذج رؤية متاح
+        if available_models:
+            return genai.GenerativeModel(model_name=available_models[0], system_instruction=SYSTEM_PROMPT)
+    except Exception:
+        pass
+    
+    return genai.GenerativeModel(model_name="gemini-1.5-flash-latest", system_instruction=SYSTEM_PROMPT)
+
+# تحويل النص إلى صوت بشري بلهجة بيضاء مريحة (شخصية حامد)
+async def generate_speech(text: str) -> str:
+    try:
+        communicate = edge_tts.Communicate(text, "ar-SA-HamedNeural", rate="+5%")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
+            temp_path = fp.name
+        await communicate.save(temp_path)
+        with open(temp_path, "rb") as f:
+            audio_bytes = f.read()
+        os.remove(temp_path)
+        return base64.b64encode(audio_bytes).decode("utf-8")
+    except Exception as e:
+        print(f"TTS Error: {e}")
+        return ""
 
 sessions = {}
 
@@ -57,64 +82,47 @@ class FeedbackRequest(BaseModel):
 @app.post("/analyze")
 async def analyze_question(file: UploadFile = File(...)):
     try:
-        client = get_client()
+        model = get_working_model()
         session_id = str(uuid.uuid4())
         image_bytes = await file.read()
         
-        chat = client.chats.create(
-            model="gemini-2.5-flash",
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=0.7
-            )
-        )
+        image_part = {
+            "mime_type": "image/jpeg",
+            "data": image_bytes
+        }
         
-        prompt = "شوف السؤال اللي بالصورة، بسط لي فكرته بالعامية البيضاء وعطني أول خطوة أسويها فقط بدون ما تحل:"
-        response = chat.send_message([
-            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-            prompt
-        ])
+        chat = model.start_chat(history=[])
+        prompt = "شف السؤال الموضح بالصورة، وضح فكرته بالعامية البيضاء ووجهني للخطوة الأولى فقط بدون حل:"
         
-        guidance = response.text
-        audio_base64 = await text_to_speech_base64(guidance)
+        response = chat.send_message([image_part, prompt])
         sessions[session_id] = chat
+        
+        guidance_text = response.text
+        audio_base64 = await generate_speech(guidance_text)
         
         return {
             "session_id": session_id,
-            "guidance": guidance,
+            "guidance": guidance_text,
             "audio": audio_base64
         }
     except Exception as e:
-        # محاولة احتياطية مع نموذج 1.5 في حال الرغبة
-        try:
-            client = get_client()
-            chat = client.chats.create(
-                model="gemini-1.5-flash",
-                config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT)
-            )
-            response = chat.send_message([
-                types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                "شوف المسألة وبسط فكرتها بالعامية البيضاء ووجهني للخطوة الأولى فقط:"
-            ])
-            guidance = response.text
-            audio_base64 = await text_to_speech_base64(guidance)
-            sessions[session_id] = chat
-            return {"session_id": session_id, "guidance": guidance, "audio": audio_base64}
-        except Exception as err:
-            return {"guidance": f"حدث خطأ: {str(err)}", "audio": None}
+        return {"guidance": f"حدث خطأ أثناء الاتصال: {str(e)}", "audio": ""}
 
 @app.post("/feedback")
 async def handle_feedback(data: FeedbackRequest):
-    chat = sessions.get(data.session_id)
-    if not chat:
-        return {"guidance": "انتهت الجلسة، صور السؤال مرة ثانية ونبدأ سوا.", "audio": None}
-    
-    user_msg = "فهمت عليك، ايش نسوي بعدها؟" if data.action == "understood" else "ما فهمت، ممكن تبسطها لي بمثال أسهل من واقع الحياة؟"
-    response = chat.send_message(user_msg)
-    guidance = response.text
-    audio_base64 = await text_to_speech_base64(guidance)
-    
-    return {"guidance": guidance, "audio": audio_base64}
+    try:
+        chat = sessions.get(data.session_id)
+        if not chat:
+            return {"guidance": "انتهت الجلسة، صور السؤال مجدداً ونبدأ من جديد.", "audio": ""}
+        
+        user_msg = "فهمت عليك، وش نسوي الحين؟" if data.action == "understood" else "ما فهمت، وضحها لي بأسلوب أسهل ومثال من الحياة اليومية."
+        response = chat.send_message(user_msg)
+        guidance_text = response.text
+        audio_base64 = await generate_speech(guidance_text)
+        
+        return {"guidance": guidance_text, "audio": audio_base64}
+    except Exception as e:
+        return {"guidance": "تعذر الرد، يرجى المحاولة ثانية.", "audio": ""}
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
